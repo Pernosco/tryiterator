@@ -1223,6 +1223,7 @@ where
 }
 
 impl<I: ?Sized + TryIterator> TryIteratorExt for I {}
+impl<I: ?Sized + DoubleEndedTryIterator> DoubleEndedTryIteratorExt for I {}
 
 /// Import this module to get access to the "normal" set of tryiterator
 /// features.
