@@ -557,6 +557,55 @@ pub trait DoubleEndedTryIteratorExt: DoubleEndedTryIterator {
     fn try_next_back(&mut self) -> Result<Option<Self::Ok>, Self::Error> {
         DoubleEndedTryIterator::try_next_back(self)
     }
+
+    /// This is the reverse version of `TryIteratorExt::try_fold2`.
+    ///
+    /// NB: try_rfold is already taken as a method on DoubleEndedIterator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tryiterator::DoubleEndedTryIteratorExt;
+    ///
+    /// let values = vec![Ok::<_, u64>(2u64), Ok(40)];
+    /// let sum = values.into_iter()
+    ///     .try_rfold2(0u64, |mut sum, i| {
+    ///         sum += i;
+    ///         Ok::<_, u64>(sum)
+    ///     });
+    /// assert_eq!(sum, Ok(42));
+    /// ```
+    ///
+    /// ```
+    /// use tryiterator::DoubleEndedTryIteratorExt;
+    ///
+    /// let values = vec![Err(20u64), Ok(2u64), Err(40)];
+    /// let sum = values.into_iter()
+    ///     .try_rfold2(0u64, |mut sum, i| {
+    ///         sum += i;
+    ///         Ok(sum)
+    ///     });
+    /// assert_eq!(sum, Err(40u64));
+    /// ```
+    /// ```
+    /// use tryiterator::DoubleEndedTryIteratorExt;
+    ///
+    /// let values = vec![Ok::<_, i64>(2u64), Ok(40u64)];
+    /// let sum = values.into_iter()
+    ///     .try_rfold2(0u64, |_, _| Err(-42));
+    /// assert_eq!(sum, Err(-42));
+    /// ```
+    fn try_rfold2<B, F>(mut self, init: B, mut f: F) -> Result<B, Self::Error>
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Ok) -> Result<B, Self::Error>,
+    {
+        let mut accum = init;
+        while let Some(x) = DoubleEndedTryIterator::try_next_back(&mut self)? {
+            accum = f(accum, x)?;
+        }
+        Ok(accum)
+    }
 }
 
 /// Iterator for the `TryIteratorExt::map_ok` method.
