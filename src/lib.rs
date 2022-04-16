@@ -30,10 +30,12 @@ use core::iter::{FusedIterator, Iterator};
 mod private_try_iterator {
     use super::Iterator;
 
+    /// This trait exists to prevent any additional implementations of TryIterator.
     pub trait Sealed {}
 
     impl<I, T, E> Sealed for I where I: ?Sized + Iterator<Item = Result<T, E>> {}
 
+    /// This trait exists to enable try_collect.
     pub trait Cast {
         type Ok;
         type Error;
