@@ -992,7 +992,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if let Some(next) = self.next.as_mut().and_then(|i| TryIterator::next(i)) {
+            if let Some(next) = self.next.as_mut().and_then(TryIterator::next) {
                 break Some(next.map_err(Into::into));
             }
 
