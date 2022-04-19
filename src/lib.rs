@@ -24,21 +24,27 @@
 //! and the methods already present on `Iterator` can be used to act on both
 //! cases at once.
 use core::fmt::Debug;
-use core::iter::{FusedIterator, Iterator};
+use core::iter::{FusedIterator, Iterator, Peekable};
 
 /// Internal implementation details.
 mod private_try_iterator {
     use super::Iterator;
 
+    /// This trait exists to prevent any additional implementations of TryIterator.
     pub trait Sealed {}
 
     impl<I, T, E> Sealed for I where I: ?Sized + Iterator<Item = Result<T, E>> {}
 
+    /// This trait exists to enable try_collect.
     pub trait Cast {
         type Ok;
         type Error;
         type Iter: Iterator<Item = Result<Self::Ok, Self::Error>>;
         fn cast(self) -> Self::Iter;
+        fn cast_item_ref(item: &<Self::Iter as Iterator>::Item) -> &Result<Self::Ok, Self::Error>;
+        fn cast_item_mut(
+            item: &mut <Self::Iter as Iterator>::Item,
+        ) -> &mut Result<Self::Ok, Self::Error>;
     }
 
     impl<I, T, E> Cast for I
@@ -50,6 +56,14 @@ mod private_try_iterator {
         type Iter = I;
         fn cast(self) -> Self::Iter {
             self
+        }
+        fn cast_item_ref(item: &<Self::Iter as Iterator>::Item) -> &Result<Self::Ok, Self::Error> {
+            item
+        }
+        fn cast_item_mut(
+            item: &mut <Self::Iter as Iterator>::Item,
+        ) -> &mut Result<Self::Ok, Self::Error> {
+            item
         }
     }
 }
@@ -475,29 +489,6 @@ pub trait TryIteratorExt: TryIterator {
         })
     }
 
-    /// Creates a `TryIterator` that allows peeking at the next success value
-    /// of the iterator without consuming it. Error values will be returned
-    /// eagerly.
-    ///
-    /// # Examples
-    /// ```
-    /// use tryiterator::TryIteratorExt;
-    ///
-    /// let values1 = vec![Ok(2u64), Ok(0u64), Err(7u64)];
-    /// let mut iter = values1.into_iter().try_peekable();
-    /// assert_eq!(iter.next(), Some(Ok(2)));
-    /// assert_eq!(iter.peek(), Some(Ok(&0)));
-    /// assert_eq!(iter.next(), Some(Ok(0)));
-    /// assert_eq!(iter.peek_mut(), Some(Err(7)));
-    /// assert_eq!(iter.next(), None);
-    /// ```
-    fn try_peekable(self) -> TryPeekable<Self>
-    where
-        Self: Sized,
-    {
-        TryPeekable::new(self)
-    }
-
     /// Skip elements from this `TryIterator` while the provided predicate
     /// returns true. Once the predicate returns false, that element and
     /// all future elements are passed through, and the predicate is not
@@ -583,6 +574,132 @@ pub trait DoubleEndedTryIteratorExt: DoubleEndedTryIterator {
     /// easy use with the `?` operator.
     fn try_next_back(&mut self) -> Result<Option<Self::Ok>, Self::Error> {
         DoubleEndedTryIterator::try_next_back(self)
+    }
+
+    /// This is the reverse version of `TryIteratorExt::try_fold2`.
+    ///
+    /// NB: try_rfold is already taken as a method on DoubleEndedIterator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tryiterator::DoubleEndedTryIteratorExt;
+    ///
+    /// let values = vec![Ok::<_, u64>(2u64), Ok(40)];
+    /// let sum = values.into_iter()
+    ///     .try_rfold2(0u64, |mut sum, i| {
+    ///         sum += i;
+    ///         Ok::<_, u64>(sum)
+    ///     });
+    /// assert_eq!(sum, Ok(42));
+    /// ```
+    ///
+    /// ```
+    /// use tryiterator::DoubleEndedTryIteratorExt;
+    ///
+    /// let values = vec![Err(20u64), Ok(2u64), Err(40)];
+    /// let sum = values.into_iter()
+    ///     .try_rfold2(0u64, |mut sum, i| {
+    ///         sum += i;
+    ///         Ok(sum)
+    ///     });
+    /// assert_eq!(sum, Err(40u64));
+    /// ```
+    /// ```
+    /// use tryiterator::DoubleEndedTryIteratorExt;
+    ///
+    /// let values = vec![Ok::<_, i64>(2u64), Ok(40u64)];
+    /// let sum = values.into_iter()
+    ///     .try_rfold2(0u64, |_, _| Err(-42));
+    /// assert_eq!(sum, Err(-42));
+    /// ```
+    fn try_rfold2<B, F>(mut self, init: B, mut f: F) -> Result<B, Self::Error>
+    where
+        Self: Sized,
+        F: FnMut(B, Self::Ok) -> Result<B, Self::Error>,
+    {
+        let mut accum = init;
+        while let Some(x) = DoubleEndedTryIterator::try_next_back(&mut self)? {
+            accum = f(accum, x)?;
+        }
+        Ok(accum)
+    }
+}
+
+/// An extension trait that adds methods to `Peekable` that are useful when the
+/// underlying `Iterator` is a `TryIterator`.
+pub trait TryPeekableExt {
+    #[allow(missing_docs)]
+    type I: TryIterator + private_try_iterator::Cast;
+
+    /// This returns a `Result<Option<&T>, &E>` rather than the
+    /// `Option<&Result<T, E>>` returned by `Peekable::peek`.
+    ///
+    /// ```
+    /// use tryiterator::{TryIteratorExt, TryPeekableExt};
+    ///
+    /// let values = vec![Ok::<_, u64>(2u64), Ok(40)];
+    /// let mut iter = values.into_iter().peekable();
+    /// assert_eq!(iter.try_peek(), Ok(Some(&2)));
+    /// ```
+    fn try_peek(
+        &mut self,
+    ) -> Result<
+        Option<&<<Self as TryPeekableExt>::I as TryIterator>::Ok>,
+        &<<Self as TryPeekableExt>::I as TryIterator>::Error,
+    >;
+
+    /// This returns a `Result<Option<&mut T>, &mut E>` rather than the
+    /// `Option<&mut Result<T, E>>` returned by `Peekable::peek_mut`.
+    ///
+    /// ```
+    /// use tryiterator::{TryIteratorExt, TryPeekableExt};
+    ///
+    /// let values = vec![Ok::<_, u64>(2u64), Ok(40)];
+    /// let mut iter = values.into_iter().peekable();
+    /// assert_eq!(iter.try_peek_mut(), Ok(Some(&mut 2)));
+    /// *iter.try_peek_mut().unwrap().unwrap() = 4;
+    /// assert_eq!(iter.try_next(), Ok(Some(4)));
+    /// ```
+    fn try_peek_mut(
+        &mut self,
+    ) -> Result<
+        Option<&mut <<Self as TryPeekableExt>::I as TryIterator>::Ok>,
+        &mut <<Self as TryPeekableExt>::I as TryIterator>::Error,
+    >;
+}
+
+impl<I> TryPeekableExt for Peekable<I>
+where
+    I: TryIterator
+        + private_try_iterator::Cast<
+            Iter = I,
+            Ok = <I as TryIterator>::Ok,
+            Error = <I as TryIterator>::Error,
+        >,
+{
+    type I = I;
+    fn try_peek(
+        &mut self,
+    ) -> Result<
+        Option<&<<Self as TryPeekableExt>::I as TryIterator>::Ok>,
+        &<<Self as TryPeekableExt>::I as TryIterator>::Error,
+    > {
+        self.peek()
+            .map(I::cast_item_ref)
+            .map(Result::as_ref)
+            .transpose()
+    }
+    fn try_peek_mut(
+        &mut self,
+    ) -> Result<
+        Option<&mut <<Self as TryPeekableExt>::I as TryIterator>::Ok>,
+        &mut <<Self as TryPeekableExt>::I as TryIterator>::Error,
+    > {
+        self.peek_mut()
+            .map(I::cast_item_mut)
+            .map(Result::as_mut)
+            .transpose()
     }
 }
 
@@ -1043,78 +1160,6 @@ where
 {
 }
 
-/// Iterator for the `TryIteratorExt::try_peekable` method.
-#[derive(Debug, Clone)]
-pub struct TryPeekable<I>
-where
-    I: TryIterator,
-{
-    inner: I,
-    // NB: Errors are never stored, they are propagated immediately.
-    next: Option<Option<I::Ok>>,
-}
-
-impl<I> TryPeekable<I>
-where
-    I: TryIterator + Sized,
-{
-    fn new(inner: I) -> Self {
-        TryPeekable { inner, next: None }
-    }
-
-    /// If the `next()` value is `Ok`, returns a reference to it without
-    /// advancing the iterator. If it is an `Err`, returns it after advancing
-    /// the iterator.
-    pub fn peek(&mut self) -> Option<Result<&I::Ok, I::Error>> {
-        if self.next.is_none() {
-            self.next = Some(match TryIterator::next(&mut self.inner) {
-                Some(Err(e)) => return Some(Err(e)),
-                Some(Ok(v)) => Some(v),
-                None => None,
-            });
-        }
-
-        self.next.as_ref().unwrap().as_ref().map(Ok)
-    }
-
-    /// If the `next()` value is `Ok`, returns a mutable reference to it without
-    /// advancing the iterator. If it is an `Err`, returns it after advancing
-    /// the iterator.
-    pub fn peek_mut(&mut self) -> Option<Result<&mut I::Ok, I::Error>> {
-        if self.next.is_none() {
-            self.next = Some(match TryIterator::next(&mut self.inner) {
-                Some(Err(e)) => return Some(Err(e)),
-                Some(Ok(v)) => Some(v),
-                None => None,
-            });
-        }
-
-        self.next.as_mut().unwrap().as_mut().map(Ok)
-    }
-}
-
-impl<I> Iterator for TryPeekable<I>
-where
-    I: TryIterator + Sized,
-{
-    type Item = Result<I::Ok, I::Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.next.take() {
-            Some(v) => v.map(Ok),
-            None => TryIterator::next(&mut self.inner),
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl<I> FusedIterator for TryPeekable<I> where I: TryIterator + FusedIterator + Sized {}
-
-// XXXkhuey: implement DoubleEndedIterator for TryPeekable?
-
 /// Iterator for the `TryIteratorExt::try_skip_while` method.
 #[derive(Debug, Clone)]
 pub struct TrySkipWhile<I, F>
@@ -1250,10 +1295,12 @@ where
 }
 
 impl<I: ?Sized + TryIterator> TryIteratorExt for I {}
+impl<I: ?Sized + DoubleEndedTryIterator> DoubleEndedTryIteratorExt for I {}
 
 /// Import this module to get access to the "normal" set of tryiterator
 /// features.
 pub mod prelude {
     pub use crate::DoubleEndedTryIteratorExt;
     pub use crate::TryIteratorExt;
+    pub use crate::TryPeekableExt;
 }
