@@ -427,7 +427,7 @@ pub trait TryIteratorExt: TryIterator {
         Self: Sized,
     {
         let mut accum = 0;
-        while let Some(_) = TryIterator::try_next(&mut self)? {
+        while Option::is_some(&TryIterator::try_next(&mut self)?) {
             accum += 1;
         }
         Ok(accum)
