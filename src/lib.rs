@@ -418,6 +418,35 @@ pub trait TryIteratorExt: TryIterator {
         Ok(accum)
     }
 
+    /// Consumes the iterator, counting the number of iterations and returns either the
+    /// number of elements or the encountered error.
+    ///
+    /// ```
+    /// use tryiterator::TryIteratorExt;
+    ///
+    /// let values = vec![Ok::<_, i64>(23u64), Ok(40u64)];
+    /// let sum = values.into_iter().try_count();
+    /// assert_eq!(sum, Ok(2));
+    /// ```
+    ///
+    /// ```
+    /// use tryiterator::TryIteratorExt;
+    ///
+    /// let values = vec![Ok::<_, bool>(2u64), Err(false)];
+    /// let sum = values.into_iter().try_count();
+    /// assert_eq!(sum, Err(false));
+    /// ```
+    fn try_count(mut self) -> Result<usize, Self::Error>
+    where
+        Self: Sized,
+    {
+        let mut accum = 0;
+        while Option::is_some(&TryIterator::try_next(&mut self)?) {
+            accum += 1;
+        }
+        Ok(accum)
+    }
+
     /// Calls a closure on each element of this `TryIterator`.
     /// Any error in the iterator will short-circuit the computation.
     /// If the closure can fail, or produces a value, use `try_fold2`.
